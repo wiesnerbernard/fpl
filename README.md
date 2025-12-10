@@ -58,10 +58,10 @@ This will create:
 
 ### Legacy Scripts
 
-The original scripts are still available in the root directory:
-- `pull_fpl_to_sheet.py` - Original FPL to sheet script
-- `pull_script.py` - General FPL data pulling script
-- `pull_and_sync_scrypt.py` - Pull and sync with Notion (requires env vars)
+Complex scripts have been moved to the `legacy/` directory for reference:
+- `legacy/pull_and_sync_scrypt.py` - Advanced Notion sync with player scoring (862 lines)
+
+These can be refactored into the modular `src/` structure in future iterations.
 
 ## Development
 
