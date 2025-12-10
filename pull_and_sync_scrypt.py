@@ -264,7 +264,7 @@ players["xGI_per90"] = (players["expected_goals"] + players["expected_assists"])
 
 players["points_per90"] = players["total_points"] * 90 / mins
 
-# NOTE: keep Value/90 for display but DO NOT USE in scoring
+# keep for display, NOT for scoring
 players["value_per90"]  = players["points_per90"] / players["price_£m"]
 
 players["bps_per90"]   = players["bps"] * 90 / mins
@@ -284,9 +284,9 @@ mask_mid = players["PositionSelect"] == "MID"
 mask_fwd = players["PositionSelect"] == "FWD"
 
 # =============================================================================
-# ---------- Empirical Bayes shrinkage (CHANGED: stronger shrinkage) ----------
+# ---------- Empirical Bayes shrinkage (stronger) ----------
 # =============================================================================
-PRIOR_MINS = 1000  # CHANGED from 300. Heavily regresses low-minute noise.
+PRIOR_MINS = 1000  # stronger regression for low-minutes noise
 
 def eb_shrink_series(rate_per90: pd.Series, mins: pd.Series, prior_rate: float) -> pd.Series:
     r = pd.to_numeric(rate_per90, errors="coerce")
@@ -315,9 +315,9 @@ for pos, mask in [("GKP", mask_gkp), ("DEF", mask_def), ("MID", mask_mid), ("FWD
     players.loc[mask, "saves_per90_shrunk"]  = eb_shrink_series(players.loc[mask, "saves_per90"], mins_pos, pri_sv90.get(pos, 0.0))
 
 # =============================================================================
-# ---------- Long/short horizon blend (NEW) ----------
+# ---------- Long/short horizon blend ----------
 # =============================================================================
-RECENT_GWS = 6  # used for rate_short and minutes trend
+RECENT_GWS = 6  # used for rate short and trend
 
 def fetch_history(pid: int):
     try:
@@ -339,7 +339,6 @@ players["recent_mins"] = [
 ]
 players["recent_share"] = (players["recent_mins"] / (RECENT_GWS * 90)).clip(0, 1)
 
-# compute short-horizon per90 (then shrink it too)
 short_xgi90 = []
 short_pts90 = []
 short_bps90 = []
@@ -360,14 +359,13 @@ for h in histories:
     short_pts90.append(pts_last * 90 / mins_last)
     short_bps90.append(bps_last * 90 / mins_last)
 
-players["xGI_per90_short"]    = short_xgi90
+players["xGI_per90_short"]     = short_xgi90
 players["points_per90_short"] = short_pts90
-players["bps_per90_short"]   = short_bps90
+players["bps_per90_short"]    = short_bps90
 
-# shrink short rates with same EB prior
-players["xGI_per90_short_shrunk"] = players["xGI_per90_short"]
+players["xGI_per90_short_shrunk"]     = players["xGI_per90_short"]
 players["points_per90_short_shrunk"] = players["points_per90_short"]
-players["bps_per90_short_shrunk"] = players["bps_per90_short"]
+players["bps_per90_short_shrunk"]    = players["bps_per90_short"]
 
 for pos, mask in [("GKP", mask_gkp), ("DEF", mask_def), ("MID", mask_mid), ("FWD", mask_fwd)]:
     mins_pos_recent = players.loc[mask, "recent_mins"]
@@ -375,14 +373,10 @@ for pos, mask in [("GKP", mask_gkp), ("DEF", mask_def), ("MID", mask_mid), ("FWD
     players.loc[mask, "points_per90_short_shrunk"] = eb_shrink_series(players.loc[mask, "points_per90_short"], mins_pos_recent, pri_pts90.get(pos, 0.0))
     players.loc[mask, "bps_per90_short_shrunk"] = eb_shrink_series(players.loc[mask, "bps_per90_short"], mins_pos_recent, pri_bps90.get(pos, 0.0))
 
-# blended rates: 70% long, 30% short (NEW)
-players["xGI_per90_blend"] = 0.70 * players["xGI_per90_shrunk"] + 0.30 * players["xGI_per90_short_shrunk"]
-players["points_per90_blend"] = 0.70 * players["points_per90_shrunk"] + 0.30 * players["points_per90_short_shrunk"]
-players["bps_per90_blend"] = 0.70 * players["bps_per90_shrunk"] + 0.30 * players["bps_per90_short_shrunk"]
+players["xGI_per90_blend"]     = 0.70 * players["xGI_per90_shrunk"] + 0.30 * players["xGI_per90_short_shrunk"]
+players["points_per90_blend"]  = 0.70 * players["points_per90_shrunk"] + 0.30 * players["points_per90_short_shrunk"]
+players["bps_per90_blend"]     = 0.70 * players["bps_per90_shrunk"] + 0.30 * players["bps_per90_short_shrunk"]
 
-# =============================================================================
-# ---------- Log-scale blended per-90s BEFORE normalization (CHANGED) ----------
-# =============================================================================
 players["xGI_blend_log"]    = np.log1p(players["xGI_per90_blend"])
 players["pts_blend_log"]    = np.log1p(players["points_per90_blend"])
 players["bps_blend_log"]    = np.log1p(players["bps_per90_blend"])
@@ -415,11 +409,10 @@ for m in [mask_gkp, mask_def, mask_mid, mask_fwd]:
     norm_form.loc[m] = robust_minmax(players.loc[m, "form"])
 
 # =============================================================================
-# ---------- Base points-potential score (CHANGED: no value terms) ----------
+# ---------- Base points-potential score (no value) ----------
 # =============================================================================
 base_score_0_1 = pd.Series(0.0, index=players.index)
 
-# Forwards: ceiling first (xGI), then points, then BPS, small form
 base_score_0_1.loc[mask_fwd] = (
     0.50 * norm_xgi.loc[mask_fwd] +
     0.30 * norm_pts.loc[mask_fwd] +
@@ -427,7 +420,6 @@ base_score_0_1.loc[mask_fwd] = (
     0.05 * norm_form.loc[mask_fwd]
 )
 
-# Midfielders: xGI heavy, points next, BPS and form moderate
 base_score_0_1.loc[mask_mid] = (
     0.45 * norm_xgi.loc[mask_mid] +
     0.30 * norm_pts.loc[mask_mid] +
@@ -435,7 +427,6 @@ base_score_0_1.loc[mask_mid] = (
     0.10 * norm_form.loc[mask_mid]
 )
 
-# Defenders: points + CS main, xGI meaningful for attacking defs
 base_score_0_1.loc[mask_def] = (
     0.25 * norm_xgi.loc[mask_def] +
     0.25 * norm_pts.loc[mask_def] +
@@ -444,7 +435,6 @@ base_score_0_1.loc[mask_def] = (
     0.05 * norm_form.loc[mask_def]
 )
 
-# Goalkeepers: points + saves + CS, BPS/form small
 base_score_0_1.loc[mask_gkp] = (
     0.35 * norm_pts.loc[mask_gkp] +
     0.30 * norm_sv.loc[mask_gkp] +
@@ -454,25 +444,27 @@ base_score_0_1.loc[mask_gkp] = (
 )
 
 # =============================================================================
-# ---------- Minutes multiplier (CHANGED: steep logistic, no high floor) ----------
+# ---------- Minutes multiplier (FIXED block) ----------
 # =============================================================================
-# season minutes share
-TOTAL_TEAM_MINS = players["team"].map(lambda t: upcoming["event"].max() or 1)  # proxy, safe
-# safer: use matches played from bootstrap if present; fallback to 38
-matches_played = pd.to_numeric(players.get("games_played"), errors="coerce").fillna(38)
+# Bootstrap often doesn't include games_played -> safe fallback Series
+if "games_played" in players.columns:
+    matches_played = pd.to_numeric(players["games_played"], errors="coerce")
+    matches_played = matches_played.fillna(38).clip(lower=1)
+else:
+    matches_played = pd.Series(38, index=players.index, dtype="float64")
+
 season_share = (players["minutes"] / (matches_played * 90)).clip(0, 1)
 
 def logistic(x, k=12.0, x0=0.55):
-    # steep S-curve around 55% share
     return 1.0 / (1.0 + np.exp(-k * (x - x0)))
 
 minutes_mult = logistic(season_share, k=12.0, x0=0.55)
-minutes_mult = minutes_mult.clip(0.10, 1.00)  # CHANGED floor to 0.10
+minutes_mult = minutes_mult.clip(0.10, 1.00)
 
 players["season_score_100"] = (base_score_0_1 * minutes_mult * 100).clip(0, 100)
 
 # =============================================================================
-# ---------- Rotation / chance of playing (CHANGED: cap downside at 0.70) ----------
+# ---------- Rotation / chance of playing (cap downside) ----------
 # =============================================================================
 chance_next = pd.to_numeric(players.get("chance_of_playing_next_round"), errors="coerce")
 chance_this = pd.to_numeric(players.get("chance_of_playing_this_round"), errors="coerce")
@@ -486,47 +478,37 @@ status_fallback = pd.Series(
 chance = chance.fillna(status_fallback)
 chance = (chance / 100.0).clip(0, 1)
 
-rotation_mult = (0.70 + 0.30 * chance).clip(0.70, 1.00)  # CHANGED
+rotation_mult = (0.70 + 0.30 * chance).clip(0.70, 1.00)
 
 players["season_score_100"] = (players["season_score_100"] * rotation_mult).clip(0, 100)
 
 # =============================================================================
-# ---------- Ceiling boosters (NEW) ----------
+# ---------- Ceiling boosters ----------
 # =============================================================================
-# Penalties, corners, free kicks: lower rank == more likely taker.
-# We'll convert ranks to 0..1 "share-like" boosts per position.
 def rank_to_boost(rank: pd.Series, max_rank=4):
     r = pd.to_numeric(rank, errors="coerce")
-    # rank 1 -> 1.0, rank max -> small, NaN -> 0
     return (1.0 - (r - 1) / (max_rank - 1)).clip(0, 1).fillna(0)
 
 pen_boost = rank_to_boost(players["on_pens_rank"], max_rank=4)
 corner_boost = rank_to_boost(players["on_corners_rank"], max_rank=4)
 fk_boost = rank_to_boost(players["on_fk_rank"], max_rank=4)
 
-# Team attacking strength proxy: use team expected goals total
 team_xg = players.groupby("team")["expected_goals"].transform("sum")
 team_xg_z = (team_xg - team_xg.mean()) / (team_xg.std(ddof=0) + 1e-9)
 
 ceiling_bonus = pd.Series(0.0, index=players.index)
-
-# Pens matter most for MID/FWD
 ceiling_bonus += np.where(mask_fwd | mask_mid, 0.08 * pen_boost, 0.02 * pen_boost)
-# Set pieces mostly MID/DEF
 ceiling_bonus += np.where(mask_mid | mask_def, 0.05 * corner_boost + 0.04 * fk_boost, 0.01 * corner_boost)
-# Team attack helps MID/FWD
 ceiling_bonus += np.where(mask_mid | mask_fwd, 0.05 * team_xg_z.clip(-2, 2), 0.0)
 
-# Minutes trend bonus: recent_share above season_share
 trend = (players["recent_share"] - season_share).clip(0, 0.15)
 ceiling_bonus += trend
 
 ceiling_mult = (1.0 + ceiling_bonus).clip(0.90, 1.30)
-
 players["season_score_100"] = (players["season_score_100"] * ceiling_mult).clip(0, 100)
 
 # =============================================================================
-# ---------- Fixtures (CHANGED: slightly wider sensitivity) ----------
+# ---------- Fixtures (wider sensitivity) ----------
 # =============================================================================
 FIX_NEUTRAL = 3.0
 
@@ -544,7 +526,7 @@ FIXTURE_PARAMS = {
 
 def ceiling_factor(base: pd.Series) -> pd.Series:
     b = pd.to_numeric(base, errors="coerce").fillna(0).clip(0, 1)
-    return 0.60 + 0.40 * b  # your existing logic is fine
+    return 0.60 + 0.40 * b
 
 def fixture_mult_pos_horizon(fdr: pd.Series, base: pd.Series, pos: pd.Series, horizon: str) -> pd.Series:
     f = pd.to_numeric(fdr, errors="coerce")
@@ -565,7 +547,7 @@ def fixture_mult_pos_horizon(fdr: pd.Series, base: pd.Series, pos: pd.Series, ho
         bonus = (raw_bonus * cf.loc[mask]).clip(-cap, cap)
         mult.loc[mask] = (1.0 + bonus)
 
-    return mult.clip(0.65, 1.35)  # slightly wider
+    return mult.clip(0.65, 1.35)
 
 players["fixture_mult_next3"] = fixture_mult_pos_horizon(
     players["next3_fdr_avg"], base_score_0_1, players["PositionSelect"], "next3"
@@ -578,11 +560,11 @@ players["score_next3_100"] = (players["season_score_100"] * players["fixture_mul
 players["score_next1_100"] = (players["season_score_100"] * players["fixture_mult_next1"]).clip(0, 100)
 
 # =============================================================================
-# ---------- Recent-usage guardrails (CHANGED: simpler, aligns to minutes logic)
+# ---------- Recent-usage guardrails ----------
 # =============================================================================
-GUARD_MINUTES_LAST6 = 90   # < 1 full match across last 6
-GUARD_SEASON_CAP    = 35   # max SeasonScore for bench players
-GUARD_SHORT_CAP     = 55   # max Next scores for bench players (still allows punts)
+GUARD_MINUTES_LAST6 = 90
+GUARD_SEASON_CAP    = 35
+GUARD_SHORT_CAP     = 55
 
 low_recent_mask = players["recent_mins"] < GUARD_MINUTES_LAST6
 players.loc[low_recent_mask, "season_score_100"] = (
@@ -600,7 +582,7 @@ for c in ["season_score_100", "score_next3_100", "score_next1_100"]:
     players[c] = pd.to_numeric(players[c], errors="coerce").fillna(0.0).clip(0, 100)
 
 # ---------- DEBUG BLOCK ----------
-DEBUG_IDS = [53, 8, 32]  # keep your debug players, add more if needed
+DEBUG_IDS = [53, 8, 32]
 
 def debug_player(pid: int):
     row = players.loc[players["id"] == pid]
@@ -658,27 +640,22 @@ def debug_player(pid: int):
           f"Pts/90={row.get('points_per90', np.nan):.2f}  "
           f"BPS/90={row.get('bps_per90', np.nan):.2f}  "
           f"form={row.get('form', np.nan)}")
-
     print("- per90 (blend + shrunk)")
     print(f"  xGI/90_blend={row.get('xGI_per90_blend', np.nan):.3f}  "
           f"Pts/90_blend={row.get('points_per90_blend', np.nan):.2f}  "
           f"BPS/90_blend={row.get('bps_per90_blend', np.nan):.2f}")
-
     print("- normalized signals (0..1 within position)")
     print(f"  n_xGI={n_xgi:.3f}  n_Pts={n_pts:.3f}  n_BPS={n_bps:.3f}  n_Form={n_form:.3f}")
     if pos == "DEF":
         print(f"  n_CS={n_cs:.3f}")
     if pos == "GKP":
         print(f"  n_CS={n_cs:.3f}  n_Saves={n_saves:.3f}")
-
     print("- weighted base decomposition")
     for k, v in parts.items():
         print(f"  {k:>6}: {v:.4f}")
     print(f"  BASE: {base:.4f}")
-
     print("- multipliers")
     print(f"  minutes_mult={mmult:.3f}  rotation_mult={rmult:.3f}")
-
     print("- final scores")
     print(f"  SeasonScore={season:.1f}  Next3={next3:.1f}  Next1={next1:.1f}")
     print("="*80)
